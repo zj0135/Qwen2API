@@ -2,7 +2,7 @@
 
 # 🚀 Qwen-Proxy
 
-[![Version](https://img.shields.io/badge/version-2026.03.04.10.58-blue.svg)](https://github.com/Rfym21/Qwen2API)
+[![Version](https://img.shields.io/badge/version-2026.04.06.12.30-blue.svg)](https://github.com/Rfym21/Qwen2API)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-supported-blue.svg)](https://hub.docker.com/r/rfym21/qwen2api)
 
@@ -24,6 +24,7 @@ Qwen-Proxy 是一个将 `https://chat.qwen.ai` 和 `Qwen Code / Qwen Cli` 转换
 - 支持智能搜索、深度思考等高级功能
 - 支持 CLI 端点，提供 256K 上下文和工具调用能力
 - 提供 Web 管理界面，方便配置和监控
+- 批量添加账号支持实时进度展示，可在系统设置中调整登录并发数
 
 ### ⚠️ 高并发说明
 
@@ -85,6 +86,7 @@ PROXY_URL=                    # HTTP/HTTPS/SOCKS5 代理地址 (例如: http://1
 # 🗄️ 数据存储
 DATA_SAVE_MODE=none           # 数据保存模式 (none/file/redis)
 REDIS_URL=                    # Redis 连接地址 (可选，使用TLS时为rediss://)
+BATCH_LOGIN_CONCURRENCY=5     # 批量添加账号时的登录并发数
 
 # 📸 缓存配置
 CACHE_MODE=default            # 图片缓存模式 (default/file)
@@ -107,6 +109,7 @@ CACHE_MODE=default            # 图片缓存模式 (default/file)
 | `PROXY_URL` | 出站请求代理地址，支持 HTTP/HTTPS/SOCKS5 | `http://127.0.0.1:7890` |
 | `DATA_SAVE_MODE` | 数据持久化方式 | `none`/`file`/`redis` |
 | `REDIS_URL` | Redis 数据库连接地址，使用TLS加密时需使用 `rediss://` 协议 | `redis://localhost:6379` 或 `rediss://xxx.upstash.io` |
+| `BATCH_LOGIN_CONCURRENCY` | 批量添加账号时的登录并发数，可在前端系统设置中动态调整 | `5` |
 | `CACHE_MODE` | 图片缓存存储方式 | `default`/`file` |
 | `LOG_LEVEL` | 日志级别 | `DEBUG`/`INFO`/`WARN`/`ERROR` |
 | `ENABLE_FILE_LOG` | 是否启用文件日志 | `true` 或 `false` |

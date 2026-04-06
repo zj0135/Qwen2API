@@ -49,6 +49,7 @@ class Account {
             this.isInitialized = true
             logger.success(`账户管理器初始化完成，共加载 ${this.accountTokens.length} 个账户`, 'ACCOUNT')
         } catch (error) {
+            this.isInitialized = false
             logger.error('账户管理器初始化失败', 'ACCOUNT', '', error)
         }
     }
@@ -87,6 +88,8 @@ class Account {
         } catch (error) {
             logger.error('加载账户令牌失败', 'ACCOUNT', '', error)
             this.accountTokens = []
+            this.accountRotator.setAccounts(this.accountTokens)
+            throw error
         }
     }
 
@@ -149,7 +152,7 @@ class Account {
                 }
                 logger.success(`CLI账户 ${account.email} 初始化成功`, 'CLI')
             } else {
-                logger.error(`CLI账户 ${account.email} 初始化失败：无效的响应数据`, 'CLI')
+                logger.error(`CLI账户 ${account.email} 初始化失败：无效的响应数据`, 'CLI', '', cliAccount)
             }
         } catch (error) {
             logger.error(`CLI账户 ${account.email} 初始化失败`, 'CLI', '', error)
@@ -523,9 +526,16 @@ class Account {
 
             // 添加到内存
             this.accountTokens.push(newAccount)
+            const insertedIndex = this.accountTokens.length - 1
 
             // 保存到持久化存储
-            await this.dataPersistence.saveAccount(email, newAccount)
+            const saved = await this.dataPersistence.saveAccount(email, newAccount)
+            if (!saved) {
+                this.accountTokens.splice(insertedIndex, 1)
+                this.accountRotator.setAccounts(this.accountTokens)
+                logger.error(`账户 ${email} 持久化失败，已回滚内存数据`, 'ACCOUNT')
+                return false
+            }
 
             // 更新轮询器
             this.accountRotator.setAccounts(this.accountTokens)
@@ -559,9 +569,16 @@ class Account {
 
             // 添加到内存
             this.accountTokens.push(newAccount)
+            const insertedIndex = this.accountTokens.length - 1
 
             // 保存到持久化存储
-            await this.dataPersistence.saveAccount(email, newAccount)
+            const saved = await this.dataPersistence.saveAccount(email, newAccount)
+            if (!saved) {
+                this.accountTokens.splice(insertedIndex, 1)
+                this.accountRotator.setAccounts(this.accountTokens)
+                logger.error(`账户 ${email} 持久化失败，已回滚内存数据`, 'ACCOUNT')
+                return false
+            }
 
             // 更新轮询器
             this.accountRotator.setAccounts(this.accountTokens)

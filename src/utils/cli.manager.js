@@ -1,4 +1,5 @@
 const crypto = require('crypto')
+const { logger } = require('./logger')
 const { getProxyAgent, getChatBaseUrl, applyProxyToFetchOptions } = require('./proxy-helper')
 
 /**
@@ -35,6 +36,30 @@ function generatePKCEPair() {
 
 class CliAuthManager {
     /**
+     * 读取响应体
+     * @param {Response} response - Fetch 响应对象
+     * @returns {Promise<*>} 响应体
+     */
+    async readResponseBody(response) {
+        const contentType = response.headers.get('content-type') || ''
+        const rawText = await response.text()
+
+        if (!rawText) {
+            return ''
+        }
+
+        if (contentType.includes('application/json')) {
+            try {
+                return JSON.parse(rawText)
+            } catch (error) {
+                return rawText
+            }
+        }
+
+        return rawText
+    }
+
+    /**
      * 启动 OAuth 设备授权流程
      * @returns {Promise<Object>} 包含设备代码、验证URL和代码验证器的对象
      */
@@ -50,7 +75,6 @@ class CliAuthManager {
         })
 
         const chatBaseUrl = getChatBaseUrl()
-        const proxyAgent = getProxyAgent()
 
         const fetchOptions = {
             method: 'POST',
@@ -61,10 +85,7 @@ class CliAuthManager {
             body: bodyData,
         }
 
-        // 添加代理配置
-        if (proxyAgent) {
-            fetchOptions.agent = proxyAgent
-        }
+        applyProxyToFetchOptions(fetchOptions)
 
         try {
             const response = await fetch(`${chatBaseUrl}/api/v1/oauth2/device/code`, fetchOptions)
@@ -77,9 +98,19 @@ class CliAuthManager {
                     code_verifier: code_verifier
                 }
             } else {
-                throw new Error()
+                const responseBody = await this.readResponseBody(response)
+                logger.error('CLI设备授权初始化失败', 'CLI', '', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    body: responseBody
+                })
+                throw new Error('device_flow_failed')
             }
         } catch (error) {
+            logger.error('CLI设备授权流程异常', 'CLI', '', {
+                url: `${chatBaseUrl}/api/v1/oauth2/device/code`,
+                message: error.message
+            })
             return {
                 status: false,
                 device_code: null,
@@ -101,7 +132,6 @@ class CliAuthManager {
     async authorizeLogin(user_code, access_token) {
         try {
             const chatBaseUrl = getChatBaseUrl()
-            const proxyAgent = getProxyAgent()
 
             const fetchOptions = {
                 method: 'POST',
@@ -115,18 +145,26 @@ class CliAuthManager {
                 })
             }
 
-            if (proxyAgent) {
-                fetchOptions.agent = proxyAgent
-            }
+            applyProxyToFetchOptions(fetchOptions)
 
             const response = await fetch(`${chatBaseUrl}/api/v2/oauth2/authorize`, fetchOptions)
 
             if (response.ok) {
                 return true
             } else {
-                throw new Error()
+                const responseBody = await this.readResponseBody(response)
+                logger.error('CLI设备授权确认失败', 'CLI', '', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    body: responseBody
+                })
+                throw new Error('authorize_failed')
             }
         } catch (error) {
+            logger.error('CLI设备授权确认异常', 'CLI', '', {
+                url: `${chatBaseUrl}/api/v2/oauth2/authorize`,
+                message: error.message
+            })
             return false
         }
     }
@@ -141,7 +179,6 @@ class CliAuthManager {
         let pollInterval = 5000
         const maxAttempts = 60
         const chatBaseUrl = getChatBaseUrl()
-        const proxyAgent = getProxyAgent()
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             const bodyData = new URLSearchParams({
@@ -160,16 +197,12 @@ class CliAuthManager {
                 body: bodyData,
             }
 
-            if (proxyAgent) {
-                fetchOptions.agent = proxyAgent
-            }
+            applyProxyToFetchOptions(fetchOptions)
 
             try {
                 const response = await fetch(`${chatBaseUrl}/api/v1/oauth2/token`, fetchOptions)
 
                 if (response.ok) {
-
-
                     const tokenData = await response.json()
 
                     // 转换为凭据格式
@@ -179,15 +212,29 @@ class CliAuthManager {
                         expiry_date: tokenData.expires_in ? Date.now() + tokenData.expires_in * 1000 : undefined,
                     }
 
+                    if (!credentials.access_token || !credentials.refresh_token || !credentials.expiry_date) {
+                        logger.error('CLI轮询令牌成功但返回数据不完整', 'CLI', '', tokenData)
+                    }
+
                     return credentials
                 }
+
+                const responseBody = await this.readResponseBody(response)
+                logger.warn(`CLI轮询令牌未完成 (${attempt + 1}/${maxAttempts})`, 'CLI', '', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    body: responseBody
+                })
 
                 // 等待5秒, 然后继续轮询
                 await new Promise(resolve => setTimeout(resolve, pollInterval))
             } catch (error) {
                 // 等待5秒, 然后继续轮询
                 await new Promise(resolve => setTimeout(resolve, pollInterval))
-                console.log(`轮询尝试 ${attempt + 1}/${maxAttempts} 失败:`, error)
+                logger.error(`CLI轮询令牌异常 (${attempt + 1}/${maxAttempts})`, 'CLI', '', {
+                    url: `${chatBaseUrl}/api/v1/oauth2/token`,
+                    message: error.message
+                })
                 continue
             }
         }
@@ -207,7 +254,8 @@ class CliAuthManager {
      */
     async initCliAccount(access_token) {
         const deviceFlow = await this.initiateDeviceFlow()
-        if (!deviceFlow.status || !await this.authorizeLogin(deviceFlow.user_code, access_token)) {
+        if (!deviceFlow.status) {
+            logger.error('CLI账户初始化失败：设备授权流程未成功启动', 'CLI')
             return {
                 status: false,
                 access_token: null,
@@ -216,7 +264,23 @@ class CliAuthManager {
             }
         }
 
-        return await this.pollForToken(deviceFlow.device_code, deviceFlow.code_verifier)
+        if (!await this.authorizeLogin(deviceFlow.user_code, access_token)) {
+            logger.error('CLI账户初始化失败：设备授权确认未通过', 'CLI', '', {
+                user_code: deviceFlow.user_code
+            })
+            return {
+                status: false,
+                access_token: null,
+                refresh_token: null,
+                expiry_date: null
+            }
+        }
+
+        const cliToken = await this.pollForToken(deviceFlow.device_code, deviceFlow.code_verifier)
+        if (!cliToken.access_token || !cliToken.refresh_token || !cliToken.expiry_date) {
+            logger.error('CLI账户初始化失败：轮询令牌返回数据不完整', 'CLI', '', cliToken)
+        }
+        return cliToken
     }
 
     /**
@@ -232,7 +296,6 @@ class CliAuthManager {
             }
 
             const chatBaseUrl = getChatBaseUrl()
-            const proxyAgent = getProxyAgent()
 
             const bodyData = new URLSearchParams({
                 grant_type: 'refresh_token',
@@ -249,9 +312,7 @@ class CliAuthManager {
                 body: bodyData
             }
 
-            if (proxyAgent) {
-                fetchOptions.agent = proxyAgent
-            }
+            applyProxyToFetchOptions(fetchOptions)
 
             const response = await fetch(`${chatBaseUrl}/api/v1/oauth2/token`, fetchOptions)
 

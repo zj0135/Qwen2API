@@ -24,6 +24,7 @@ const config = {
     dataSaveMode: process.env.DATA_SAVE_MODE || "none",
     apiKeys: apiKeys,
     adminKey: adminKey,
+    batchLoginConcurrency: Math.max(1, parseInt(process.env.BATCH_LOGIN_CONCURRENCY) || 5),
     simpleModelMap: process.env.SIMPLE_MODEL_MAP === 'true' ? true : false,
     listenAddress: process.env.LISTEN_ADDRESS || null,
     listenPort: process.env.SERVICE_PORT || 3000,

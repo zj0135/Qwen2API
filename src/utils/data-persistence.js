@@ -32,7 +32,7 @@ class DataPersistence {
       }
     } catch (error) {
       logger.error('加载账户数据失败', 'DATA', '', error)
-      return []
+      throw error
     }
   }
 

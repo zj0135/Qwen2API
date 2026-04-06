@@ -7,25 +7,28 @@ router.get('/v1/models', apiKeyVerify, handleGetModels)
 
 router.get('/models', handleGetModels)
 
-router.post('/cli/v1/models', async (req, res) => {
+const handleCliModels = async (req, res) => {
     res.json({
         object: 'list',
         data: [
             {
-                id: 'qwen3-coder-plus',
+                id: 'coder-model',
                 object: 'model',
                 created: 1719878112,
                 owned_by: 'qwen-code'
             },
             {
-                id: 'qwen3-coder-flash',
+                id: 'qwen3.6-plus',
                 object: 'model',
                 created: 1719878112,
                 owned_by: 'qwen-code'
             },
         ]
     })
-})
+}
+
+router.get('/cli/v1/models', apiKeyVerify, handleCliModels)
+router.post('/cli/v1/models', apiKeyVerify, handleCliModels)
 
 
 module.exports = router

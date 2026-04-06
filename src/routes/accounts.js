@@ -1,10 +1,265 @@
 const express = require('express')
 const router = express.Router()
+const config = require('../config')
 const accountManager = require('../utils/account')
 const { logger } = require('../utils/logger')
 const { JwtDecode } = require('../utils/tools')
 const { adminKeyVerify } = require('../middlewares/authorization')
 const { deleteAccount, saveAccounts, refreshAccountToken } = require('../utils/setting')
+
+const batchAccountTasks = new Map()
+const BATCH_TASK_RETENTION_MS = 1000 * 60 * 30
+const BATCH_TASK_RESULT_LIMIT = 12
+
+/**
+ * 生成批量任务 ID
+ * @returns {string} 任务 ID
+ */
+const generateBatchTaskId = () => `batch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+
+/**
+ * 计划清理已完成的批量任务
+ * @param {string} taskId - 任务 ID
+ */
+const scheduleBatchTaskCleanup = (taskId) => {
+  setTimeout(() => {
+    batchAccountTasks.delete(taskId)
+  }, BATCH_TASK_RETENTION_MS)
+}
+
+/**
+ * 解析批量账号文本
+ * @param {string} accountsText - 原始账号文本
+ * @returns {{ accountLines: string[], parsedAccounts: Array<{ email: string, password: string }>, invalidCount: number }} 解析结果
+ */
+const parseBatchAccountsText = (accountsText) => {
+  const normalizedText = String(accountsText).replace(/[\r]/g, '\n')
+  const accountLines = normalizedText
+    .split('\n')
+    .map(item => item.trim())
+    .filter(item => item !== '')
+
+  const parsedAccounts = []
+  let invalidCount = 0
+
+  for (const accountLine of accountLines) {
+    const separatorIndex = accountLine.indexOf(':')
+    if (separatorIndex === -1) {
+      invalidCount++
+      continue
+    }
+
+    const email = accountLine.slice(0, separatorIndex).trim()
+    const password = accountLine.slice(separatorIndex + 1).trim()
+
+    if (!email || !password) {
+      invalidCount++
+      continue
+    }
+
+    parsedAccounts.push({ email, password })
+  }
+
+  return {
+    accountLines,
+    parsedAccounts,
+    invalidCount
+  }
+}
+
+/**
+ * 构造新的批量任务
+ * @param {number} total - 总条目数
+ * @param {number} valid - 有效条目数
+ * @param {number} skipped - 跳过条目数
+ * @param {number} invalid - 无效条目数
+ * @returns {object} 任务对象
+ */
+const createBatchAccountTask = (total, valid, skipped, invalid) => {
+  const concurrency = Math.max(1, parseInt(config.batchLoginConcurrency) || 5)
+  const task = {
+    id: generateBatchTaskId(),
+    status: 'pending',
+    message: '任务已创建，等待执行',
+    concurrency,
+    total,
+    valid,
+    skipped,
+    invalid,
+    processed: 0,
+    completed: skipped + invalid,
+    success: 0,
+    failed: 0,
+    activeEmails: [],
+    failedEmails: [],
+    recentResults: [],
+    createdAt: Date.now(),
+    startedAt: null,
+    finishedAt: null
+  }
+
+  batchAccountTasks.set(task.id, task)
+  return task
+}
+
+/**
+ * 记录批量任务最近结果
+ * @param {object} task - 任务对象
+ * @param {object} result - 单条结果
+ */
+const pushBatchTaskResult = (task, result) => {
+  task.recentResults.unshift(result)
+  if (task.recentResults.length > BATCH_TASK_RESULT_LIMIT) {
+    task.recentResults.length = BATCH_TASK_RESULT_LIMIT
+  }
+}
+
+/**
+ * 获取批量任务快照
+ * @param {object} task - 任务对象
+ * @returns {object} 可序列化的任务状态
+ */
+const getBatchTaskSnapshot = (task) => {
+  const total = task.total || 0
+  const progress = total > 0 ? Number(((task.completed / total) * 100).toFixed(2)) : 100
+
+  return {
+    taskId: task.id,
+    status: task.status,
+    message: task.message,
+    total: task.total,
+    valid: task.valid,
+    skipped: task.skipped,
+    invalid: task.invalid,
+    processed: task.processed,
+    completed: task.completed,
+    pending: Math.max(0, task.total - task.completed),
+    success: task.success,
+    failed: task.failed,
+    progress,
+    concurrency: task.concurrency,
+    activeEmails: task.activeEmails,
+    failedEmails: task.failedEmails,
+    recentResults: task.recentResults,
+    createdAt: task.createdAt,
+    startedAt: task.startedAt,
+    finishedAt: task.finishedAt
+  }
+}
+
+/**
+ * 更新批量任务文案
+ * @param {object} task - 任务对象
+ */
+const updateBatchTaskMessage = (task) => {
+  if (task.status === 'completed') {
+    task.message = `批量添加完成，成功 ${task.success} 个，失败 ${task.failed} 个`
+    return
+  }
+
+  if (task.status === 'failed') {
+    if (!task.message) {
+      task.message = '批量添加执行失败'
+    }
+    return
+  }
+
+  const activeCount = task.activeEmails.length
+  if (activeCount > 0) {
+    task.message = `正在处理 ${task.completed}/${task.total}，并发中 ${activeCount} 个`
+  } else {
+    task.message = `正在处理 ${task.completed}/${task.total}`
+  }
+}
+
+/**
+ * 执行单个账号的批量登录任务
+ * @param {object} task - 任务对象
+ * @param {{ email: string, password: string }} account - 账号信息
+ */
+const processBatchAccountItem = async (task, account) => {
+  const { email, password } = account
+  task.activeEmails.push(email)
+  updateBatchTaskMessage(task)
+
+  try {
+    const authToken = await accountManager.login(email, password)
+    if (!authToken) {
+      throw new Error('登录失败')
+    }
+
+    const decoded = JwtDecode(authToken)
+    const saved = await accountManager.addAccountWithToken(email, password, authToken, decoded.exp)
+    if (!saved) {
+      throw new Error('保存失败')
+    }
+
+    task.success++
+    pushBatchTaskResult(task, {
+      email,
+      status: 'success',
+      message: '登录成功'
+    })
+  } catch (error) {
+    task.failed++
+    if (!task.failedEmails.includes(email)) {
+      task.failedEmails.push(email)
+    }
+
+    pushBatchTaskResult(task, {
+      email,
+      status: 'failed',
+      message: error.message || '登录失败'
+    })
+
+    logger.error(`批量登录账号失败: ${email}`, 'ACCOUNT', '', error)
+  } finally {
+    task.processed++
+    task.completed++
+    task.activeEmails = task.activeEmails.filter(item => item !== email)
+    updateBatchTaskMessage(task)
+  }
+}
+
+/**
+ * 执行批量账号添加任务
+ * @param {object} task - 任务对象
+ * @param {Array<{ email: string, password: string }>} newAccounts - 待处理账号
+ * @returns {Promise<object>} 最终任务对象
+ */
+const runBatchAccountTask = async (task, newAccounts) => {
+  try {
+    task.status = 'running'
+    task.startedAt = Date.now()
+    updateBatchTaskMessage(task)
+
+    if (newAccounts.length === 0) {
+      task.status = 'completed'
+      task.finishedAt = Date.now()
+      updateBatchTaskMessage(task)
+      scheduleBatchTaskCleanup(task.id)
+      return task
+    }
+
+    for (let i = 0; i < newAccounts.length; i += task.concurrency) {
+      const batch = newAccounts.slice(i, i + task.concurrency)
+      await Promise.allSettled(batch.map(account => processBatchAccountItem(task, account)))
+    }
+
+    task.status = 'completed'
+    task.finishedAt = Date.now()
+    updateBatchTaskMessage(task)
+    scheduleBatchTaskCleanup(task.id)
+    return task
+  } catch (error) {
+    task.status = 'failed'
+    task.finishedAt = Date.now()
+    task.message = error.message || '批量添加执行失败'
+    logger.error('批量创建账号失败', 'ACCOUNT', '', error)
+    scheduleBatchTaskCleanup(task.id)
+    return task
+  }
+}
 
 /**
  * 获取所有账号（分页）
@@ -135,84 +390,75 @@ router.delete('/deleteAccount', adminKeyVerify, async (req, res) => {
  */
 router.post('/setAccounts', adminKeyVerify, async (req, res) => {
   try {
-    let { accounts } = req.body
+    let { accounts, async: asyncTask } = req.body
     if (!accounts) {
       return res.status(400).json({ error: '账号列表不能为空' })
     }
 
-    accounts = accounts.replace(/[\r]/g, '\n')
-    const accountList = accounts.split('\n').filter(item => item.trim() !== '')
+    const { accountLines, parsedAccounts, invalidCount } = parseBatchAccountsText(accounts)
 
-    if (accountList.length === 0) {
+    if (accountLines.length === 0) {
       return res.status(400).json({ error: '没有有效的账号' })
     }
 
-    // 解析账号列表
-    const parsedAccounts = accountList.map(account => {
-      const [email, password] = account.split(':')
-      return { email: email?.trim(), password: password?.trim() }
-    }).filter(acc => acc.email && acc.password)
+    if (parsedAccounts.length === 0) {
+      return res.status(400).json({ error: '没有符合格式的账号，请使用 email:password' })
+    }
 
-    // 过滤已存在的账号
     const existingEmails = new Set(accountManager.getAllAccountKeys().map(acc => acc.email))
-    const newAccounts = parsedAccounts.filter(acc => !existingEmails.has(acc.email))
-    const skippedCount = parsedAccounts.length - newAccounts.length
+    const seenEmails = new Set()
+    const newAccounts = []
+    let skippedCount = 0
 
-    // 并行登录（限制并发数为5）
-    const concurrencyLimit = 5
-    const results = []
+    for (const account of parsedAccounts) {
+      if (existingEmails.has(account.email) || seenEmails.has(account.email)) {
+        skippedCount++
+        continue
+      }
 
-    for (let i = 0; i < newAccounts.length; i += concurrencyLimit) {
-      const batch = newAccounts.slice(i, i + concurrencyLimit)
-      const batchResults = await Promise.allSettled(
-        batch.map(async ({ email, password }) => {
-          const authToken = await accountManager.login(email, password)
-          if (!authToken) {
-            throw new Error(`${email} 登录失败`)
-          }
-          const decoded = JwtDecode(authToken)
-          return { email, password, token: authToken, expires: decoded.exp }
-        })
-      )
-      // 记录每个结果对应的邮箱
-      batchResults.forEach((result, idx) => {
-        results.push({ ...result, email: batch[idx].email })
+      seenEmails.add(account.email)
+      newAccounts.push(account)
+    }
+
+    const task = createBatchAccountTask(accountLines.length, parsedAccounts.length, skippedCount, invalidCount)
+
+    if (asyncTask === true || asyncTask === 'true') {
+      runBatchAccountTask(task, newAccounts)
+
+      return res.status(202).json({
+        message: '批量添加任务已创建',
+        ...getBatchTaskSnapshot(task)
       })
     }
 
-    // 统计结果并保存成功的账号
-    let successCount = 0
-    let failedCount = 0
-    const failedEmails = []
-
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        const { email, password, token, expires } = result.value
-        const saved = await accountManager.addAccountWithToken(email, password, token, expires)
-        if (saved) {
-          successCount++
-        } else {
-          failedCount++
-          failedEmails.push(email)
-        }
-      } else {
-        failedCount++
-        failedEmails.push(result.email)
-      }
-    }
+    await runBatchAccountTask(task, newAccounts)
 
     res.json({
       message: '批量添加完成',
-      total: parsedAccounts.length,
-      success: successCount,
-      failed: failedCount,
-      skipped: skippedCount,
-      failedEmails: failedEmails.slice(0, 10) // 最多返回10个失败邮箱
+      ...getBatchTaskSnapshot(task)
     })
   } catch (error) {
     logger.error('批量创建账号失败', 'ACCOUNT', '', error)
     res.status(500).json({ error: error.message })
   }
+})
+
+/**
+ * GET /batchTasks/:taskId
+ * 获取批量添加任务进度
+ *
+ * @param {string} taskId 任务 ID
+ * @returns {Object} 任务进度
+ */
+router.get('/batchTasks/:taskId', adminKeyVerify, async (req, res) => {
+  const { taskId } = req.params
+  const task = batchAccountTasks.get(taskId)
+
+  if (!task) {
+    return res.status(404).json({ error: '任务不存在或已过期' })
+  }
+
+  res.json(getBatchTaskSnapshot(task))
 })
 
 /**

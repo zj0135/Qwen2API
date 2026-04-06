@@ -1,5 +1,5 @@
 <template>
-  <div class="w-100vw h-100vh p-4 overflow-y-auto">
+  <div class="dashboard-scroll w-100vw h-100vh p-4 overflow-y-auto">
     <div class="container mx-auto">
       <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 px-4 space-y-4 md:space-y-0 pt-5">
         <h1 class="text-4xl font-bold">Token Manager <span class="text-gray-500 text-sm">by 兜豆子</span></h1>
@@ -237,15 +237,19 @@
 
     <!-- 添加账号模态框 -->
     <div v-if="showAddModal" 
-         class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
-         @click.self="showAddModal = false">
-      <div class="relative bg-white/80 backdrop-blur-lg rounded-2xl p-6 w-11/12 max-w-md transform transition-all duration-300 scale-100 opacity-100">
-        <div class="flex mb-6 border-b border-gray-200">
-          <button :class="['flex-1 py-2 font-bold transition-all rounded-t-xl duration-300', addMode==='single' ? 'text-gray-600 border-b-2 border-gray-500 bg-gray-50/60' : 'text-gray-500 bg-transparent']" @click="addMode='single'">单账号添加</button>
-          <button :class="['flex-1 py-2 font-bold transition-all rounded-t-xl duration-300', addMode==='batch' ? 'text-gray-600 border-b-2 border-gray-500 bg-gray-50/60' : 'text-gray-500 bg-transparent']" @click="addMode='batch'">批量添加</button>
+         class="fixed inset-0 z-50 overflow-y-auto bg-black/60 px-4 py-6 backdrop-blur-sm"
+          @click.self="closeAddModal">
+      <div :class="[
+            'relative mx-auto flex max-h-[calc(100vh-3rem)] w-full flex-col overflow-hidden rounded-2xl bg-white/80 p-6 backdrop-blur-lg transform transition-all duration-300 scale-100 opacity-100',
+            addMode === 'batch' ? 'max-w-3xl' : 'max-w-md'
+          ]">
+        <div class="mb-6 flex shrink-0 border-b border-gray-200">
+          <button :class="['flex-1 py-2 font-bold transition-all rounded-t-xl duration-300', addMode==='single' ? 'text-gray-600 border-b-2 border-gray-500 bg-gray-50/60' : 'text-gray-500 bg-transparent', isBatchAdding ? 'opacity-50 cursor-not-allowed' : '']" @click="!isBatchAdding && (addMode='single')">单账号添加</button>
+          <button :class="['flex-1 py-2 font-bold transition-all rounded-t-xl duration-300', addMode==='batch' ? 'text-gray-600 border-b-2 border-gray-500 bg-gray-50/60' : 'text-gray-500 bg-transparent', isBatchAdding ? 'opacity-50 cursor-not-allowed' : '']" @click="!isBatchAdding && (addMode='batch')">批量添加</button>
         </div>
+        <div class="modal-scroll min-h-0 flex-1 overflow-y-auto pr-2">
         <transition name="fade" mode="out-in">
-          <div v-if="addMode==='single'" key="single">
+          <div v-if="addMode==='single'" key="single" class="pr-1">
             <h2 class="text-xl font-bold mb-4">添加账号</h2>
             <div class="space-y-4">
               <div>
@@ -259,7 +263,7 @@
                        class="mt-1 block w-full rounded-xl border-gray-300 bg-white/50 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 transition-all duration-300 h-12 text-base px-4">
               </div>
               <div class="flex justify-end space-x-4 pt-4">
-                <button @click="showAddModal = false" 
+                <button @click="closeAddModal" 
                         class="px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 transition-all duration-300">
                   取消
                 </button>
@@ -270,28 +274,104 @@
               </div>
             </div>
           </div>
-          <div v-else key="batch">
+          <div v-else key="batch" class="pr-1">
             <h2 class="text-xl font-bold mb-4 px-4">批量添加账号</h2>
             <div class="space-y-4">
               <div>
                 <label class="block text-sm font-medium text-gray-700 px-4 pb-2">账号列表（每行一个，格式：email:password）</label>
-                <textarea v-model="batchAccounts" rows="6" class="mt-1 block w-full rounded-xl border-gray-300 bg-white/50 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 transition-all duration-300 h-36 text-base px-4 py-3 resize-none"></textarea>
+                <textarea v-model="batchAccounts"
+                          :disabled="isBatchAdding"
+                          rows="6"
+                          class="mt-1 block w-full rounded-xl border-gray-300 bg-white/50 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 transition-all duration-300 h-36 text-base px-4 py-3 resize-none disabled:opacity-70"></textarea>
+              </div>
+              <div v-if="batchTask" class="mx-4 rounded-2xl border border-slate-200 bg-white/70 p-5 shadow-sm">
+                <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <div class="text-sm text-slate-500">任务状态</div>
+                    <div class="mt-1 flex items-center gap-3">
+                      <span :class="['inline-flex rounded-full px-3 py-1 text-xs font-semibold', batchTaskStatusClass]">
+                        {{ batchTaskStatusText }}
+                      </span>
+                      <span class="text-sm text-slate-600">{{ batchTask.message }}</span>
+                    </div>
+                  </div>
+                  <div class="text-sm text-slate-500">
+                    任务 ID: <span class="font-mono text-slate-700">{{ batchTask.taskId }}</span>
+                  </div>
+                </div>
+
+                <div class="mt-4">
+                  <div class="mb-2 flex items-center justify-between text-sm text-slate-600">
+                    <span>处理进度</span>
+                    <span>{{ batchTask.completed }}/{{ batchTask.total }} · {{ batchTask.progress.toFixed(0) }}%</span>
+                  </div>
+                  <div class="h-3 overflow-hidden rounded-full bg-slate-200">
+                    <div class="h-full rounded-full bg-gradient-to-r from-sky-500 via-cyan-500 to-emerald-500 transition-all duration-500" :style="batchTaskProgressStyle"></div>
+                  </div>
+                </div>
+
+                <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+                  <div class="rounded-xl bg-slate-50 px-4 py-3">
+                    <div class="text-xs text-slate-500">总数</div>
+                    <div class="mt-1 text-lg font-semibold text-slate-800">{{ batchTask.total }}</div>
+                  </div>
+                  <div class="rounded-xl bg-emerald-50 px-4 py-3">
+                    <div class="text-xs text-emerald-600">成功</div>
+                    <div class="mt-1 text-lg font-semibold text-emerald-700">{{ batchTask.success }}</div>
+                  </div>
+                  <div class="rounded-xl bg-rose-50 px-4 py-3">
+                    <div class="text-xs text-rose-600">失败</div>
+                    <div class="mt-1 text-lg font-semibold text-rose-700">{{ batchTask.failed }}</div>
+                  </div>
+                  <div class="rounded-xl bg-amber-50 px-4 py-3">
+                    <div class="text-xs text-amber-600">跳过</div>
+                    <div class="mt-1 text-lg font-semibold text-amber-700">{{ batchTask.skipped }}</div>
+                  </div>
+                  <div class="rounded-xl bg-violet-50 px-4 py-3">
+                    <div class="text-xs text-violet-600">格式无效</div>
+                    <div class="mt-1 text-lg font-semibold text-violet-700">{{ batchTask.invalid }}</div>
+                  </div>
+                </div>
+
+                <div v-if="batchTask.activeEmails?.length" class="mt-4 rounded-xl bg-sky-50 px-4 py-3">
+                  <div class="text-sm font-medium text-sky-700">当前处理中</div>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <span v-for="email in batchTask.activeEmails" :key="email" class="rounded-full bg-white px-3 py-1 text-xs text-sky-700 shadow-sm">
+                      {{ email }}
+                    </span>
+                  </div>
+                </div>
+
+                <div v-if="batchTask.recentResults?.length" class="mt-4">
+                  <div class="mb-2 text-sm font-medium text-slate-700">最近结果</div>
+                  <div class="max-h-52 space-y-2 overflow-y-auto pr-1">
+                    <div v-for="item in batchTask.recentResults" :key="`${item.email}-${item.status}-${item.message}`" class="flex items-start justify-between rounded-xl border border-slate-200 bg-white px-4 py-3">
+                      <div class="min-w-0 pr-4">
+                        <div class="truncate text-sm font-medium text-slate-800">{{ item.email }}</div>
+                        <div class="mt-1 text-xs text-slate-500">{{ item.message }}</div>
+                      </div>
+                      <span :class="['inline-flex shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold', item.status === 'success' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700']">
+                        {{ item.status === 'success' ? '成功' : '失败' }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
               <div class="flex justify-end space-x-4 pt-4">
-                <button @click="showAddModal = false"
-                        :disabled="isBatchAdding"
+                <button @click="closeAddModal"
                         class="px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 transition-all duration-300 disabled:opacity-50">
-                  取消
+                  {{ isBatchAdding ? '后台继续' : '关闭' }}
                 </button>
                 <button @click="addBatchTokens"
                         :disabled="isBatchAdding"
                         class="px-4 py-2 rounded-xl bg-black text-white hover:bg-white hover:text-black transition-all duration-300 disabled:opacity-50">
-                  {{ isBatchAdding ? '添加中...' : '批量添加' }}
+                  {{ isBatchAdding ? '任务执行中...' : '批量添加' }}
                 </button>
               </div>
             </div>
           </div>
         </transition>
+        </div>
       </div>
     </div>
 
@@ -319,7 +399,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import axios from 'axios'
 
 const tokens = ref([])
@@ -331,6 +411,9 @@ const newAccount = ref({
 })
 const batchAccounts = ref('')
 const isBatchAdding = ref(false)
+const batchTask = ref(null)
+const batchTaskPollTimer = ref(null)
+const batchTaskNotified = ref(false)
 
 // 分页相关
 const displayedTokens = ref([])
@@ -356,6 +439,118 @@ const toast = ref({
   message: '',
   type: 'success'
 })
+const batchTaskStatusText = computed(() => {
+  const status = batchTask.value?.status
+  if (status === 'completed') return '已完成'
+  if (status === 'failed') return '失败'
+  if (status === 'running') return '进行中'
+  if (status === 'pending') return '排队中'
+  return '未开始'
+})
+const batchTaskStatusClass = computed(() => {
+  const status = batchTask.value?.status
+  if (status === 'completed') return 'bg-emerald-100 text-emerald-700'
+  if (status === 'failed') return 'bg-rose-100 text-rose-700'
+  if (status === 'running') return 'bg-sky-100 text-sky-700'
+  if (status === 'pending') return 'bg-amber-100 text-amber-700'
+  return 'bg-slate-100 text-slate-700'
+})
+const batchTaskProgressStyle = computed(() => ({
+  width: `${Math.max(0, Math.min(100, Number(batchTask.value?.progress || 0)))}%`
+}))
+
+const getAuthHeaders = () => ({
+  'Authorization': localStorage.getItem('apiKey') || ''
+})
+
+const clearBatchTaskPolling = () => {
+  if (batchTaskPollTimer.value) {
+    clearTimeout(batchTaskPollTimer.value)
+    batchTaskPollTimer.value = null
+  }
+}
+
+const resetBatchTaskState = (clearInput = false) => {
+  clearBatchTaskPolling()
+  batchTask.value = null
+  batchTaskNotified.value = false
+  isBatchAdding.value = false
+
+  if (clearInput) {
+    batchAccounts.value = ''
+  }
+}
+
+const buildBatchTaskMessage = (task) => {
+  let message = `批量添加完成: 成功${task.success}个`
+  if (task.failed > 0) message += `, 失败${task.failed}个`
+  if (task.skipped > 0) message += `, 跳过${task.skipped}个`
+  if (task.invalid > 0) message += `, 无效${task.invalid}个`
+  if (task.failedEmails?.length > 0) {
+    message += `\n失败账号: ${task.failedEmails.slice(0, 10).join(', ')}`
+  }
+  return message
+}
+
+const finalizeBatchTask = async (task) => {
+  clearBatchTaskPolling()
+  batchTask.value = task
+  isBatchAdding.value = false
+
+  if (task.success > 0) {
+    await getTokens()
+  }
+
+  if (!batchTaskNotified.value) {
+    batchTaskNotified.value = true
+    showToast(
+      buildBatchTaskMessage(task),
+      task.failed > 0 || task.invalid > 0 ? 'warning' : 'success'
+    )
+  }
+}
+
+const pollBatchTask = async (taskId) => {
+  clearBatchTaskPolling()
+
+  try {
+    const res = await axios.get(`/api/batchTasks/${taskId}`, {
+      headers: getAuthHeaders()
+    })
+
+    batchTask.value = res.data
+
+    if (res.data.status === 'completed' || res.data.status === 'failed') {
+      await finalizeBatchTask(res.data)
+      return
+    }
+
+    batchTaskPollTimer.value = setTimeout(() => {
+      pollBatchTask(taskId)
+    }, 800)
+  } catch (error) {
+    console.error('获取批量添加进度失败:', error)
+
+    if (batchTask.value) {
+      batchTask.value = {
+        ...batchTask.value,
+        message: '进度查询失败，正在重试...'
+      }
+    }
+
+    batchTaskPollTimer.value = setTimeout(() => {
+      pollBatchTask(taskId)
+    }, 1500)
+  }
+}
+
+const closeAddModal = () => {
+  showAddModal.value = false
+
+  if (!isBatchAdding.value && addMode.value === 'batch' && batchTask.value?.status === 'completed') {
+    resetBatchTaskState(batchTask.value.failed === 0 && batchTask.value.invalid === 0)
+  }
+}
 
 const isSelected = (email) => {
   return selectedTokens.value.includes(email)
@@ -392,9 +587,7 @@ const deleteSelected = async () => {
     const deletePromises = selectedTokens.value.map(email => 
       axios.delete('/api/deleteAccount', {
         data: { email },
-        headers: {
-          'Authorization': localStorage.getItem('apiKey') || ''
-        }
+        headers: getAuthHeaders()
       })
     )
     
@@ -414,16 +607,14 @@ const deleteAllAccounts = async () => {
     // 先获取全部账号数据
     const res = await axios.get('/api/getAllAccounts', {
       params: { page: 1, pageSize: 10000 },
-      headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
+      headers: getAuthHeaders()
     })
     const allAccounts = res.data.data
 
     const deletePromises = allAccounts.map(token =>
       axios.delete('/api/deleteAccount', {
         data: { email: token.email },
-        headers: {
-          'Authorization': localStorage.getItem('apiKey') || ''
-        }
+        headers: getAuthHeaders()
       })
     )
 
@@ -486,9 +677,7 @@ const getTokens = async () => {
         page: currentPage.value,
         pageSize: pageSize.value
       },
-      headers: {
-        'Authorization': localStorage.getItem('apiKey') || ''
-      }
+      headers: getAuthHeaders()
     })
 
     displayedTokens.value = res.data.data
@@ -516,11 +705,9 @@ const getTokens = async () => {
 const addToken = async () => {
   try {
     await axios.post('/api/setAccount', newAccount.value, {
-      headers: {
-        'Authorization': localStorage.getItem('apiKey') || ''
-      }
+      headers: getAuthHeaders()
     })
-    showAddModal.value = false
+    closeAddModal()
     newAccount.value = { email: '', password: '' }
     await getTokens()
     showToast('添加账号成功')
@@ -532,30 +719,36 @@ const addToken = async () => {
 
 const addBatchTokens = async () => {
   if (isBatchAdding.value) return
+  if (!batchAccounts.value.trim()) {
+    showToast('请输入账号列表', 'error')
+    return
+  }
+
+  batchTaskNotified.value = false
+  clearBatchTaskPolling()
   isBatchAdding.value = true
 
   try {
-    const res = await axios.post('/api/setAccounts', { accounts: batchAccounts.value }, {
-      headers: {
-        'Authorization': localStorage.getItem('apiKey') || ''
-      }
+    const res = await axios.post('/api/setAccounts', {
+      accounts: batchAccounts.value,
+      async: true
+    }, {
+      headers: getAuthHeaders()
     })
-    showAddModal.value = false
-    batchAccounts.value = ''
-    await getTokens()
 
-    const { success, failed, skipped, failedEmails } = res.data
-    let msg = `批量添加完成: 成功${success}个`
-    if (failed > 0) msg += `, 失败${failed}个`
-    if (skipped > 0) msg += `, 跳过${skipped}个(已存在)`
-    if (failedEmails?.length > 0) {
-      msg += `\n失败账号: ${failedEmails.join(', ')}`
+    batchTask.value = res.data
+    addMode.value = 'batch'
+    showAddModal.value = true
+
+    if (res.data.status === 'completed' || res.data.status === 'failed') {
+      await finalizeBatchTask(res.data)
+      return
     }
-    showToast(msg, failed > 0 ? 'warning' : 'success')
+
+    pollBatchTask(res.data.taskId)
   } catch (error) {
     console.error('批量添加失败:', error)
     showToast('批量添加失败: ' + error.message, 'error')
-  } finally {
     isBatchAdding.value = false
   }
 }
@@ -567,9 +760,7 @@ const refreshToken = async (email) => {
 
   try {
     await axios.post('/api/refreshAccount', { email }, {
-      headers: {
-        'Authorization': localStorage.getItem('apiKey') || ''
-      }
+      headers: getAuthHeaders()
     })
 
     // 刷新成功后重新获取账号列表
@@ -598,9 +789,7 @@ const refreshAllAccounts = async () => {
     const response = await axios.post('/api/refreshAllAccounts', {
       thresholdHours: 24
     }, {
-      headers: {
-        'Authorization': localStorage.getItem('apiKey') || ''
-      }
+      headers: getAuthHeaders()
     })
 
     // 刷新成功后重新获取账号列表
@@ -623,9 +812,7 @@ const forceRefreshAllAccounts = async () => {
 
   try {
     const response = await axios.post('/api/forceRefreshAllAccounts', {}, {
-      headers: {
-        'Authorization': localStorage.getItem('apiKey') || ''
-      }
+      headers: getAuthHeaders()
     })
 
     // 刷新成功后重新获取账号列表
@@ -645,9 +832,7 @@ const deleteToken = async (email) => {
   try {
     await axios.delete('/api/deleteAccount', {
       data: { email },
-      headers: {
-        'Authorization': localStorage.getItem('apiKey') || ''
-      }
+      headers: getAuthHeaders()
     })
     await getTokens()
     showToast('删除账号成功')
@@ -662,7 +847,7 @@ const exportAccounts = async () => {
     // 获取全部账号用于导出
     const res = await axios.get('/api/getAllAccounts', {
       params: { page: 1, pageSize: 10000 },
-      headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
+      headers: getAuthHeaders()
     })
     const allAccounts = res.data.data
 
@@ -701,6 +886,10 @@ const exportAccounts = async () => {
 onMounted(() => {
   getTokens()
 })
+
+onBeforeUnmount(() => {
+  clearBatchTaskPolling()
+})
 </script>
 
 <style lang="css" scoped>
@@ -708,6 +897,68 @@ onMounted(() => {
   .container {
     padding: 0;
   }
+}
+
+.dashboard-scroll {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.38) rgba(255, 255, 255, 0.08);
+}
+
+.modal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.32) rgba(255, 255, 255, 0.06);
+}
+
+.dashboard-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.modal-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dashboard-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.modal-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+}
+
+.dashboard-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.2));
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24), 0 2px 10px rgba(15, 23, 42, 0.12);
+  background-clip: padding-box;
+}
+
+.modal-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.18));
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.dashboard-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0.28));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 4px 14px rgba(15, 23, 42, 0.16);
+}
+
+.modal-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.24));
+}
+
+.dashboard-scroll::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.34));
+}
+
+.dashboard-scroll::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .fade-enter-active, .fade-leave-active {

@@ -6,37 +6,235 @@ const MODEL_REDIRECT = {
     'qwen3.5-plus': 'coder-model',
 }
 
+const CLI_UNSUPPORTED_FIELDS = new Set([
+    'frequency_penalty',
+    'presence_penalty',
+    'logit_bias',
+    'logprobs',
+    'top_logprobs',
+    'n',
+    'seed',
+    'service_tier',
+    'user'
+])
+const CLI_DEFAULT_SYSTEM_PART = {
+    type: 'text',
+    text: '',
+    cache_control: {
+        type: 'ephemeral'
+    }
+}
+
+function pruneCliPayload(value) {
+    if (Array.isArray(value)) {
+        return value
+            .map(item => pruneCliPayload(item))
+            .filter(item => item !== undefined)
+    }
+
+    if (value && typeof value === 'object') {
+        const nextObject = {}
+
+        for (const [key, item] of Object.entries(value)) {
+            if (CLI_UNSUPPORTED_FIELDS.has(key)) {
+                continue
+            }
+
+            const nextValue = pruneCliPayload(item)
+            if (nextValue === undefined) {
+                continue
+            }
+
+            if (Array.isArray(nextValue) && nextValue.length === 0 && key !== 'messages') {
+                continue
+            }
+
+            if (
+                nextValue &&
+                typeof nextValue === 'object' &&
+                !Array.isArray(nextValue) &&
+                Object.keys(nextValue).length === 0
+            ) {
+                continue
+            }
+
+            nextObject[key] = nextValue
+        }
+
+        return nextObject
+    }
+
+    if (value === null || value === undefined) {
+        return undefined
+    }
+
+    return value
+}
+
+function isInjectedSystemPart(part) {
+    return Boolean(
+        part &&
+        typeof part === 'object' &&
+        part.type === 'text' &&
+        part.cache_control &&
+        part.cache_control.type === 'ephemeral' &&
+        typeof part.text === 'string'
+    )
+}
+
+function makeCliTextPart(text) {
+    return {
+        type: 'text',
+        text: typeof text === 'string' ? text : String(text ?? '')
+    }
+}
+
+function appendCliSystemContent(systemParts, content) {
+    if (content === undefined || content === null) {
+        return
+    }
+
+    if (Array.isArray(content)) {
+        for (const item of content) {
+            appendCliSystemContent(systemParts, item)
+        }
+        return
+    }
+
+    if (typeof content === 'string') {
+        systemParts.push(makeCliTextPart(content))
+        return
+    }
+
+    if (typeof content === 'object') {
+        if (isInjectedSystemPart(content)) {
+            return
+        }
+
+        if (typeof content.text === 'string' && content.type === 'text') {
+            systemParts.push(content)
+            return
+        }
+
+        systemParts.push(content)
+        return
+    }
+
+    systemParts.push(makeCliTextPart(content))
+}
+
+function ensureCliSystemMessage(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return messages
+    }
+
+    const systemParts = [JSON.parse(JSON.stringify(CLI_DEFAULT_SYSTEM_PART))]
+    const nonSystemMessages = []
+
+    for (const message of messages) {
+        if (!message || typeof message !== 'object') {
+            continue
+        }
+
+        const role = typeof message.role === 'string' ? message.role.toLowerCase() : ''
+        if (role === 'system') {
+            appendCliSystemContent(systemParts, message.content)
+            continue
+        }
+
+        nonSystemMessages.push(message)
+    }
+
+    return [
+        {
+            role: 'system',
+            content: systemParts
+        },
+        ...nonSystemMessages
+    ]
+}
+
+/**
+ * 读取流响应体为文本
+ * @param {*} stream - 响应流
+ * @returns {Promise<string>} 文本结果
+ */
+function readStreamBody(stream) {
+    return new Promise((resolve, reject) => {
+        if (!stream || typeof stream.on !== 'function') {
+            resolve('')
+            return
+        }
+
+        const chunks = []
+        stream.on('data', (chunk) => {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)))
+        })
+        stream.on('end', () => {
+            resolve(Buffer.concat(chunks).toString('utf8'))
+        })
+        stream.on('error', reject)
+    })
+}
+
+/**
+ * 尝试解析 CLI 错误详情
+ * @param {*} data - 原始响应体
+ * @returns {Promise<*>} 可序列化的详情
+ */
+async function normalizeCliErrorDetails(data) {
+    if (data && typeof data.on === 'function') {
+        const rawText = await readStreamBody(data)
+        if (!rawText) {
+            return ''
+        }
+
+        try {
+            return JSON.parse(rawText)
+        } catch (error) {
+            return rawText
+        }
+    }
+
+    if (Buffer.isBuffer(data)) {
+        const rawText = data.toString('utf8')
+        try {
+            return JSON.parse(rawText)
+        } catch (error) {
+            return rawText
+        }
+    }
+
+    return data
+}
+
+/**
+ * 构造 CLI 错误日志上下文
+ * @param {Error} error - 错误对象
+ * @returns {Promise<object>} 日志上下文
+ */
+async function buildCliAxiosErrorLog(error) {
+    return {
+        message: error?.message,
+        code: error?.code,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        details: await normalizeCliErrorDetails(error?.response?.data)
+    }
+}
+
 function preprocessCliRequestBody(rawBody) {
-    const body = rawBody && typeof rawBody === 'object' ? JSON.parse(JSON.stringify(rawBody)) : {}
+    const clonedBody = rawBody && typeof rawBody === 'object' ? JSON.parse(JSON.stringify(rawBody)) : {}
+    const body = pruneCliPayload(clonedBody) || {}
 
     if (body.model && MODEL_REDIRECT[body.model]) {
         body.model = MODEL_REDIRECT[body.model]
     }
-    const isStream = body.stream === true
-
-    if (isStream) {
-        const hasToolsArray = Array.isArray(body.tools)
-        if (!hasToolsArray || body.tools.length === 0) {
-            body.tools = [{
-                type: 'function',
-                function: {
-                    name: 'do_not_call_me',
-                    description: 'Do not call this tool.',
-                    parameters: {
-                        type: 'object',
-                        properties: {
-                            operation: { type: 'number', description: 'placeholder' }
-                        },
-                        required: ['operation']
-                    }
-                }
-            }]
-        }
-
-        if (!body.stream_options || typeof body.stream_options !== 'object') {
-            body.stream_options = {}
-        }
-        body.stream_options.include_usage = true
+    if (Array.isArray(body.messages) && body.messages.length > 0) {
+        body.messages = ensureCliSystemMessage(body.messages)
+    }
+    if (body.stream_options && typeof body.stream_options === 'object' && Object.keys(body.stream_options).length === 0) {
+        delete body.stream_options
     }
 
     return body
@@ -128,13 +326,19 @@ const handleCliChatCompletion = async (req, res) => {
 
         // 检查响应状态
         if (response.status !== 200) {
-            logger.error(`CLI请求使用账号[${req.account.email}]转发失败 - 状态码: ${response.status} - 当前请求数: ${req.account.cli_info.request_number}`, 'CLI', '❌')
+            const errorDetails = await normalizeCliErrorDetails(response.data)
+            logger.error(`CLI请求使用账号[${req.account.email}]转发失败 - 状态码: ${response.status} - 当前请求数: ${req.account.cli_info.request_number}`, 'CLI', '❌', {
+                status: response.status,
+                statusText: response.statusText,
+                requestBody: body,
+                details: errorDetails
+            })
             return res.status(response.status).json({
                 error: {
                     message: `api_error`,
                     type: 'api_error',
                     code: response.status,
-                    details: response.data
+                    details: errorDetails
                 }
             })
         }
@@ -176,16 +380,20 @@ const handleCliChatCompletion = async (req, res) => {
             logger.success(`CLI请求使用账号[${req.account.email}]转发成功 (JSON) - 当前请求数: ${req.account.cli_info.request_number}`, 'CLI')
         }
     } catch (error) {
-        logger.error(`CLI请求使用账号[${req.account.email}]处理异常 - 当前请求数: ${req.account.cli_info.request_number}`, 'CLI', '💥', error.message)
+        logger.error(`CLI请求使用账号[${req.account.email}]处理异常 - 当前请求数: ${req.account.cli_info.request_number}`, 'CLI', '💥', {
+            requestBody: body,
+            ...(await buildCliAxiosErrorLog(error))
+        })
 
         // 如果是axios错误，提供更详细的错误信息
         if (error.response) {
+            const errorDetails = await normalizeCliErrorDetails(error.response.data)
             return res.status(error.response.status).json({
                 error: {
                     message: "api_error",
                     type: 'api_error',
                     code: error.response.status,
-                    details: error.response.data
+                    details: errorDetails
                 }
             })
         } else if (error.request) {

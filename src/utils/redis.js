@@ -11,10 +11,11 @@ const { logger } = require('./logger')
 const REDIS_CONFIG = {
   maxRetries: 3,
   connectTimeout: 10000,
-  commandTimeout: 5000,
+  commandTimeout: 15000,
   retryDelayOnFailover: 200,
   maxRetriesPerRequest: 3,
   enableOfflineQueue: false,
+  enableReadyCheck: false,
   lazyConnect: true,
   keepAlive: 30000,
   connectionName: 'qwen2api_on_demand'
@@ -29,6 +30,10 @@ let idleTimer = null
 
 // 空闲超时时间 (5分钟)
 const IDLE_TIMEOUT = 5 * 60 * 1000
+// 长时间空闲后在下一次使用前主动重建连接，避免复用已被服务端回收的空闲连接
+const STALE_CONNECTION_THRESHOLD = 45 * 1000
+const REDIS_VERIFY_RETRIES = 3
+const REDIS_VERIFY_RETRY_DELAY = 500
 
 /**
  * 判断是否需要TLS
@@ -67,15 +72,105 @@ const createRedisConfig = () => ({
 })
 
 /**
+ * 验证 Redis 命令通道是否可用
+ * @param {object} client - Redis 客户端实例
+ * @returns {Promise<void>} 验证结果
+ */
+const verifyRedisCommandChannel = async (client) => {
+  let lastError = null
+
+  for (let attempt = 1; attempt <= REDIS_VERIFY_RETRIES; attempt++) {
+    try {
+      const pong = await client.ping()
+      if (pong !== 'PONG') {
+        throw new Error(`PING 返回异常: ${pong}`)
+      }
+
+      if (attempt > 1) {
+        logger.info(`Redis命令通道在第 ${attempt} 次校验时恢复正常`, 'REDIS', '✅')
+      }
+
+      return
+    } catch (error) {
+      lastError = error
+
+      if (attempt >= REDIS_VERIFY_RETRIES) {
+        break
+      }
+
+      logger.warn(`Redis命令通道校验失败，第 ${attempt} 次后准备重试: ${error.message}`, 'REDIS')
+      await new Promise(resolve => setTimeout(resolve, REDIS_VERIFY_RETRY_DELAY))
+    }
+  }
+
+  throw new Error(`Redis命令通道不可用: ${lastError ? lastError.message : '未知错误'}`)
+}
+
+/**
+ * 清理空闲定时器
+ */
+const clearIdleTimer = () => {
+  if (idleTimer) {
+    clearTimeout(idleTimer)
+    idleTimer = null
+  }
+}
+
+/**
+ * 等待现有 Redis 客户端恢复为可用状态
+ * @param {object} client - Redis 客户端实例
+ * @returns {Promise<object>} 可用的 Redis 客户端
+ */
+const waitForRedisReady = (client) => new Promise((resolve, reject) => {
+  if (!client) {
+    reject(new Error('Redis客户端不存在'))
+    return
+  }
+
+  if (client.status === 'ready') {
+    resolve(client)
+    return
+  }
+
+  const timeout = setTimeout(() => {
+    cleanup()
+    reject(new Error('等待Redis连接恢复超时'))
+  }, REDIS_CONFIG.connectTimeout + REDIS_CONFIG.commandTimeout)
+
+  const cleanup = () => {
+    clearTimeout(timeout)
+    client.off('ready', handleReady)
+    client.off('close', handleClose)
+    client.off('end', handleEnd)
+  }
+
+  const handleReady = () => {
+    cleanup()
+    resolve(client)
+  }
+
+  const handleClose = () => {
+    cleanup()
+    reject(new Error('Redis连接已关闭'))
+  }
+
+  const handleEnd = () => {
+    cleanup()
+    reject(new Error('Redis连接已结束'))
+  }
+
+  client.once('ready', handleReady)
+  client.once('close', handleClose)
+  client.once('end', handleEnd)
+})
+
+/**
  * 更新活动时间并重置空闲定时器
  */
 const updateActivity = () => {
   lastActivity = Date.now()
 
-  // 清除现有定时器
-  if (idleTimer) {
-    clearTimeout(idleTimer)
-  }
+  clearIdleTimer()
 
   // 设置新的空闲定时器
   idleTimer = setTimeout(() => {
@@ -87,6 +182,47 @@ const updateActivity = () => {
 }
 
 /**
+ * 绑定 Redis 事件
+ * @param {object} client - Redis 客户端实例
+ */
+const bindRedisEvents = (client) => {
+  client.on('connect', () => {
+    logger.success('Redis连接建立', 'REDIS')
+  })
+
+  client.on('ready', () => {
+    logger.success('Redis准备就绪', 'REDIS')
+    if (redis === client) {
+      updateActivity()
+    }
+  })
+
+  client.on('error', (err) => {
+    logger.error('Redis连接错误', 'REDIS', '', err)
+  })
+
+  client.on('close', () => {
+    logger.info('Redis连接关闭', 'REDIS', '🔌')
+    if (redis === client) {
+      redis = null
+      clearIdleTimer()
+    }
+  })
+
+  client.on('end', () => {
+    logger.info('Redis连接结束', 'REDIS', '🔌')
+    if (redis === client) {
+      redis = null
+      clearIdleTimer()
+    }
+  })
+
+  client.on('reconnecting', (delay) => {
+    logger.info(`Redis重新连接中...延迟: ${delay}ms`, 'REDIS', '🔄')
+  })
+}
+
+/**
  * 建立Redis连接
  */
 const connectRedis = async () => {
@@ -95,56 +231,61 @@ const connectRedis = async () => {
     return redis
   }
 
-  if (isConnecting && connectionPromise) {
+  if (redis && ['connect', 'connecting', 'reconnecting'].includes(redis.status)) {
+    if (!connectionPromise) {
+      isConnecting = true
+      connectionPromise = waitForRedisReady(redis)
+        .then(client => {
+          updateActivity()
+          return client
+        })
+        .finally(() => {
+          isConnecting = false
+          connectionPromise = null
+        })
+    }
+
+    return connectionPromise
+  }
+
+  if (connectionPromise) {
     return connectionPromise
   }
 
   isConnecting = true
-  connectionPromise = new Promise(async (resolve, reject) => {
+  connectionPromise = (async () => {
+    let newRedis = null
+
     try {
       logger.info('建立Redis连接...', 'REDIS', '🔌')
 
-      const newRedis = new Redis(config.redisURL, createRedisConfig())
+      newRedis = new Redis(config.redisURL, createRedisConfig())
+      redis = newRedis
+      bindRedisEvents(newRedis)
 
-      // 设置事件监听器
-      newRedis.on('connect', () => {
-        logger.success('Redis连接建立', 'REDIS')
-      })
-
-      newRedis.on('ready', () => {
-        logger.success('Redis准备就绪', 'REDIS')
-        redis = newRedis
-        isConnecting = false
-        updateActivity()
-        resolve(redis)
-      })
-
-      newRedis.on('error', (err) => {
-        logger.error('Redis连接错误', 'REDIS', '', err)
-        if (isConnecting) {
-          isConnecting = false
-          reject(err)
-        }
-      })
-
-      newRedis.on('close', () => {
-        logger.info('Redis连接关闭', 'REDIS', '🔌')
-        redis = null
-      })
-
-      newRedis.on('reconnecting', (delay) => {
-        logger.info(`Redis重新连接中...延迟: ${delay}ms`, 'REDIS', '🔄')
-      })
-
-      // 等待连接就绪
       await newRedis.connect()
-
+      await verifyRedisCommandChannel(newRedis)
+      updateActivity()
+      return newRedis
     } catch (error) {
-      isConnecting = false
+      if (redis === newRedis) {
+        redis = null
+      }
+
+      if (newRedis) {
+        try {
+          newRedis.disconnect()
+        } catch (disconnectError) {
+        }
+      }
+
       logger.error('Redis连接失败', 'REDIS', '', error)
-      reject(error)
+      throw error
+    } finally {
+      isConnecting = false
+      connectionPromise = null
     }
-  })
+  })()
 
   return connectionPromise
 }
@@ -153,19 +294,21 @@ const connectRedis = async () => {
  * 断开Redis连接
  */
 const disconnectRedis = async () => {
-  if (idleTimer) {
-    clearTimeout(idleTimer)
-    idleTimer = null
-  }
+  clearIdleTimer()
 
   if (redis) {
+    const currentRedis = redis
+
     try {
-      await redis.disconnect()
+      currentRedis.disconnect()
       logger.info('Redis连接已断开', 'REDIS', '🔌')
     } catch (error) {
       logger.error('断开Redis连接时出错', 'REDIS', '', error)
     } finally {
-      redis = null
+      if (redis === currentRedis) {
+        redis = null
+      }
+
       isConnecting = false
       connectionPromise = null
     }
@@ -182,6 +325,12 @@ const ensureConnection = async () => {
   }
 
   if (!redis || redis.status !== 'ready') {
+    return await connectRedis()
+  }
+
+  if (Date.now() - lastActivity > STALE_CONNECTION_THRESHOLD) {
+    logger.info('Redis连接空闲时间过长，主动重建连接', 'REDIS', '🔄')
+    await disconnectRedis()
     return await connectRedis()
   }
 
@@ -247,7 +396,7 @@ const getAllAccounts = async () => {
     return accounts
   } catch (err) {
     logger.error('获取账户时出错', 'REDIS', '', err)
-    return []
+    throw err
   }
 }
 

@@ -17,6 +17,7 @@ router.get('/settings', adminKeyVerify, async (req, res) => {
     defaultCookie: config.defaultCookie,
     autoRefresh: config.autoRefresh,
     autoRefreshInterval: config.autoRefreshInterval,
+    batchLoginConcurrency: config.batchLoginConcurrency,
     outThink: config.outThink,
     searchInfoMode: config.searchInfoMode,
     simpleModelMap: config.simpleModelMap
@@ -97,6 +98,26 @@ router.post('/setAutoRefresh', adminKeyVerify, async (req, res) => {
     })
   } catch (error) {
     logger.error('更新自动刷新设置失败', 'CONFIG', '', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// 更新批量登录并发数
+router.post('/setBatchLoginConcurrency', adminKeyVerify, async (req, res) => {
+  try {
+    const concurrency = parseInt(req.body.batchLoginConcurrency)
+
+    if (isNaN(concurrency) || concurrency < 1 || concurrency > 20) {
+      return res.status(400).json({ error: '无效的批量登录并发数，允许范围为 1-20' })
+    }
+
+    config.batchLoginConcurrency = concurrency
+    res.json({
+      status: true,
+      message: '批量登录并发数更新成功'
+    })
+  } catch (error) {
+    logger.error('更新批量登录并发数失败', 'CONFIG', '', error)
     res.status(500).json({ error: error.message })
   }
 })
