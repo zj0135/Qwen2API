@@ -2,24 +2,31 @@
     <div class="w-full min-h-screen p-4">
         <div class="container mx-auto">
             <div class="flex flex-col md:flex-row justify-between items-center mb-6 px-4 space-y-4 md:space-y-0 pt-5">
-                <h1 class="text-3xl font-bold">系统设置</h1>
-                <router-link to="/"
-                    class="action-button font-bold border border-blue-200 bg-blue-50 text-blue-900 px-4 py-2 rounded-xl shadow-sm hover:bg-blue-100 hover:border-blue-400 transition-all duration-300 transform hover:-translate-y-1 active:translate-y-0 text-center">
-                    返回Token管理
-                </router-link>
+                <h1 class="text-3xl font-bold">{{ t('settings.title') }}</h1>
+                <div class="flex items-center space-x-3">
+                    <select v-model="locale" @change="onLocaleChange"
+                        class="rounded-xl border border-gray-200 bg-white/60 backdrop-blur-sm shadow-sm px-3 py-2 text-sm focus:border-indigo-500 focus:ring-indigo-500 transition-all duration-300">
+                        <option value="ru">{{ t('lang.ru') }}</option>
+                        <option value="zh">{{ t('lang.zh') }}</option>
+                    </select>
+                    <router-link to="/"
+                        class="action-button font-bold border border-blue-200 bg-blue-50 text-blue-900 px-4 py-2 rounded-xl shadow-sm hover:bg-blue-100 hover:border-blue-400 transition-all duration-300 transform hover:-translate-y-1 active:translate-y-0 text-center">
+                        {{ t('settings.backToDash') }}
+                    </router-link>
+                </div>
             </div>
             <div class="grid grid-cols-1 gap-6 p-4">
                 <!-- API Key 管理 -->
                 <div class="setting-card relative overflow-hidden rounded-2xl p-6 flex flex-col gap-4">
                     <div class="absolute inset-0 bg-white/30 backdrop-blur-md border border-white/30 rounded-2xl"></div>
                     <div class="relative flex flex-col gap-4">
-                        <label class="text-gray-700 font-semibold text-lg">🔑 API Key 管理</label>
+                        <label class="text-gray-700 font-semibold text-lg">{{ t('settings.apiKeyTitle') }}</label>
 
                         <!-- 管理员密钥 -->
                         <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
                             <div class="flex items-center gap-2 mb-2">
-                                <span class="text-yellow-600 font-semibold">👑 管理员密钥</span>
-                                <span class="text-xs bg-yellow-200 text-yellow-800 px-2 py-1 rounded">不可修改</span>
+                                <span class="text-yellow-600 font-semibold">{{ t('settings.adminKey') }}</span>
+                                <span class="text-xs bg-yellow-200 text-yellow-800 px-2 py-1 rounded">{{ t('settings.adminReadonly') }}</span>
                             </div>
                             <input :value="settings.adminKey" type="text" readonly
                                 class="w-full rounded-lg border-gray-300 bg-gray-100 shadow-sm h-10 text-sm px-3 cursor-not-allowed">
@@ -28,15 +35,15 @@
                         <!-- 普通密钥列表 -->
                         <div class="space-y-2">
                             <div class="flex items-center justify-between">
-                                <span class="text-gray-700 font-semibold">🔐 普通密钥</span>
+                                <span class="text-gray-700 font-semibold">{{ t('settings.regularKeys') }}</span>
                                 <button @click="showAddKeyModal = true"
                                     class="bg-green-500 text-white px-3 py-1 rounded-lg text-sm hover:bg-green-600 transition-all">
-                                    + 添加密钥
+                                    {{ t('settings.addKey') }}
                                 </button>
                             </div>
 
                             <div v-if="settings.regularKeys.length === 0" class="text-gray-500 text-center py-4">
-                                暂无普通密钥
+                                {{ t('settings.noKeys') }}
                             </div>
 
                             <div v-for="(key, index) in settings.regularKeys" :key="index"
@@ -45,7 +52,7 @@
                                     class="flex-1 rounded-lg border-gray-300 bg-white shadow-sm h-8 text-sm px-3">
                                 <button @click="deleteRegularKey(index)"
                                     class="bg-red-500 text-white px-3 py-1 rounded-lg text-sm hover:bg-red-600 transition-all">
-                                    删除
+                                    {{ t('settings.delete') }}
                                 </button>
                             </div>
                         </div>
@@ -59,17 +66,17 @@
                         <div class="absolute inset-0 bg-white/30 backdrop-blur-md border border-white/30 rounded-2xl">
                         </div>
                         <div class="relative flex flex-col gap-2">
-                            <label class="text-gray-700 font-semibold">🔄 自动刷新</label>
+                            <label class="text-gray-700 font-semibold">{{ t('settings.autoRefresh') }}</label>
                             <div class="flex items-center gap-2">
                                 <input v-model="settings.autoRefresh" type="checkbox"
                                     class="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                                <span>启用自动刷新</span>
+                                <span>{{ t('settings.enableAutoRefresh') }}</span>
                             </div>
-                            <label class="text-gray-700">刷新间隔（秒）</label>
+                            <label class="text-gray-700">{{ t('settings.refreshInterval') }}</label>
                             <input v-model.number="settings.autoRefreshInterval" type="number"
                                 class="mt-1 block w-full rounded-xl border-gray-300 bg-white/60 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 transition-all duration-300 h-12 text-base px-4">
                             <button @click="saveAutoRefresh"
-                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">保存</button>
+                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">{{ t('settings.save') }}</button>
                         </div>
                     </div>
                     <!-- 批量登录并发数 -->
@@ -77,13 +84,13 @@
                         <div class="absolute inset-0 bg-white/30 backdrop-blur-md border border-white/30 rounded-2xl">
                         </div>
                         <div class="relative flex flex-col gap-2">
-                            <label class="text-gray-700 font-semibold">⚡ 批量登录并发数</label>
-                            <label class="text-gray-700">账号批量添加时的登录并发数</label>
+                            <label class="text-gray-700 font-semibold">{{ t('settings.batchConcurrency') }}</label>
+                            <label class="text-gray-700">{{ t('settings.batchConcurrencyDesc') }}</label>
                             <input v-model.number="settings.batchLoginConcurrency" type="number" min="1" max="20"
                                 class="mt-1 block w-full rounded-xl border-gray-300 bg-white/60 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 transition-all duration-300 h-12 text-base px-4">
-                            <span class="text-xs text-gray-500">建议范围 1-20，并发越高越容易触发上游风控或本地网络抖动</span>
+                            <span class="text-xs text-gray-500">{{ t('settings.batchConcurrencyHint') }}</span>
                             <button @click="saveBatchLoginConcurrency"
-                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">保存</button>
+                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">{{ t('settings.save') }}</button>
                         </div>
                     </div>
                     <!-- 思考输出 -->
@@ -91,14 +98,14 @@
                         <div class="absolute inset-0 bg-white/30 backdrop-blur-md border border-white/30 rounded-2xl">
                         </div>
                         <div class="relative flex flex-col gap-2">
-                            <label class="text-gray-700 font-semibold">💡 思考输出</label>
+                            <label class="text-gray-700 font-semibold">{{ t('settings.thinkOutput') }}</label>
                             <div class="flex items-center gap-2">
                                 <input v-model="settings.outThink" type="checkbox"
                                     class="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                                <span>启用思考输出</span>
+                                <span>{{ t('settings.enableThinkOutput') }}</span>
                             </div>
                             <button @click="saveOutThink"
-                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">保存</button>
+                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">{{ t('settings.save') }}</button>
                         </div>
                     </div>
                     <!-- 搜索信息模式 -->
@@ -106,14 +113,14 @@
                         <div class="absolute inset-0 bg-white/30 backdrop-blur-md border border-white/30 rounded-2xl">
                         </div>
                         <div class="relative flex flex-col gap-2">
-                            <label class="text-gray-700 font-semibold">🔍 搜索信息显示模式</label>
+                            <label class="text-gray-700 font-semibold">{{ t('settings.searchMode') }}</label>
                             <select v-model="settings.searchInfoMode"
                                 class="mt-1 block w-full rounded-xl border-gray-300 bg-white/60 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 transition-all duration-300 h-12 text-base px-4">
-                                <option value="table">表格模式</option>
-                                <option value="text">文本模式</option>
+                                <option value="table">{{ t('settings.searchTable') }}</option>
+                                <option value="text">{{ t('settings.searchText') }}</option>
                             </select>
                             <button @click="saveSearchInfoMode"
-                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">保存</button>
+                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">{{ t('settings.save') }}</button>
                         </div>
                     </div>
                     <!-- 简化模型映射 -->
@@ -121,14 +128,14 @@
                         <div class="absolute inset-0 bg-white/30 backdrop-blur-md border border-white/30 rounded-2xl">
                         </div>
                         <div class="relative flex flex-col gap-2">
-                            <label class="text-gray-700 font-semibold">🎯 简化模型映射</label>
+                            <label class="text-gray-700 font-semibold">{{ t('settings.simpleModelMap') }}</label>
                             <div class="flex items-center gap-2">
                                 <input v-model="settings.simpleModelMap" type="checkbox"
                                     class="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                                <span>只返回基础模型，不包含thinking、search、image等变体</span>
+                                <span>{{ t('settings.simpleModelMapDesc') }}</span>
                             </div>
                             <button @click="saveSimpleModelMap"
-                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">保存</button>
+                                class="w-full mt-2 bg-black text-white rounded-lg py-2 hover:bg-white hover:text-black border border-black transition-all duration-300">{{ t('settings.save') }}</button>
                         </div>
                     </div>
                 </div>
@@ -138,17 +145,17 @@
             <div v-if="showAddKeyModal"
                 class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
                 <div class="bg-white rounded-lg p-6 w-96 max-w-90vw">
-                    <h3 class="text-lg font-semibold mb-4">添加普通API Key</h3>
-                    <input v-model="newApiKey" type="text" placeholder="请输入API Key"
+                    <h3 class="text-lg font-semibold mb-4">{{ t('settings.addKeyTitle') }}</h3>
+                    <input v-model="newApiKey" type="text" :placeholder="t('settings.addKeyPlaceholder')"
                         class="w-full rounded-lg border-gray-300 shadow-sm h-10 text-sm px-3 mb-4">
                     <div class="flex gap-2 justify-end">
                         <button @click="showAddKeyModal = false"
                             class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-all">
-                            取消
+                            {{ t('settings.cancel') }}
                         </button>
                         <button @click="addRegularKey"
                             class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-all">
-                            添加
+                            {{ t('settings.add') }}
                         </button>
                     </div>
                 </div>
@@ -159,7 +166,10 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import axios from 'axios'
+
+const { t, locale } = useI18n()
 
 const settings = ref({
     apiKey: localStorage.getItem('apiKey'),
@@ -177,6 +187,10 @@ const settings = ref({
 
 const showAddKeyModal = ref(false)
 const newApiKey = ref('')
+
+const onLocaleChange = () => {
+    localStorage.setItem('locale', locale.value)
+}
 
 const loadSettings = async () => {
     try {
@@ -197,7 +211,7 @@ const loadSettings = async () => {
         settings.value.searchInfoMode = res.data.searchInfoMode
         settings.value.simpleModelMap = res.data.simpleModelMap
     } catch (error) {
-        console.error('加载设置失败:', error)
+        console.error('loadSettings error:', error)
     }
 }
 
@@ -206,9 +220,9 @@ const saveApiKey = async () => {
         await axios.post('/api/setApiKey', { apiKey: settings.value.apiKey }, {
             headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
         })
-        alert('API Key保存成功')
+        alert(t('smsg.apiKeySaved'))
     } catch (error) {
-        alert('API Key保存失败: ' + error.message)
+        alert(t('smsg.apiKeyFailed') + error.message)
     }
 }
 const saveAutoRefresh = async () => {
@@ -219,9 +233,9 @@ const saveAutoRefresh = async () => {
         }, {
             headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
         })
-        alert('自动刷新设置保存成功')
+        alert(t('smsg.autoRefreshSaved'))
     } catch (error) {
-        alert('自动刷新设置保存失败: ' + error.message)
+        alert(t('smsg.autoRefreshFailed') + error.message)
     }
 }
 const saveBatchLoginConcurrency = async () => {
@@ -231,9 +245,9 @@ const saveBatchLoginConcurrency = async () => {
         }, {
             headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
         })
-        alert('批量登录并发数保存成功')
+        alert(t('smsg.batchSaved'))
     } catch (error) {
-        alert('批量登录并发数保存失败: ' + error.message)
+        alert(t('smsg.batchFailed') + error.message)
     }
 }
 const saveOutThink = async () => {
@@ -241,9 +255,9 @@ const saveOutThink = async () => {
         await axios.post('/api/setOutThink', { outThink: settings.value.outThink }, {
             headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
         })
-        alert('思考输出设置保存成功')
+        alert(t('smsg.thinkSaved'))
     } catch (error) {
-        alert('思考输出设置保存失败: ' + error.message)
+        alert(t('smsg.thinkFailed') + error.message)
     }
 }
 const saveSearchInfoMode = async () => {
@@ -251,9 +265,9 @@ const saveSearchInfoMode = async () => {
         await axios.post('/api/search-info-mode', { searchInfoMode: settings.value.searchInfoMode }, {
             headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
         })
-        alert('搜索信息模式保存成功')
+        alert(t('smsg.searchModeSaved'))
     } catch (error) {
-        alert('搜索信息模式保存失败: ' + error.message)
+        alert(t('smsg.searchModeFailed') + error.message)
     }
 }
 const saveSimpleModelMap = async () => {
@@ -261,16 +275,16 @@ const saveSimpleModelMap = async () => {
         await axios.post('/api/simple-model-map', { simpleModelMap: settings.value.simpleModelMap }, {
             headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
         })
-        alert('简化模型映射设置保存成功')
+        alert(t('smsg.simpleMapSaved'))
     } catch (error) {
-        alert('简化模型映射设置保存失败: ' + error.message)
+        alert(t('smsg.simpleMapFailed') + error.message)
     }
 }
 
 // API Key 管理相关函数
 const addRegularKey = async () => {
     if (!newApiKey.value.trim()) {
-        alert('请输入API Key')
+        alert(t('smsg.enterKey'))
         return
     }
 
@@ -278,27 +292,27 @@ const addRegularKey = async () => {
         await axios.post('/api/addRegularKey', { apiKey: newApiKey.value.trim() }, {
             headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
         })
-        alert('API Key添加成功')
+        alert(t('smsg.keyAdded'))
         newApiKey.value = ''
         showAddKeyModal.value = false
         await loadSettings()
     } catch (error) {
-        alert('API Key添加失败: ' + error.message)
+        alert(t('smsg.keyAddFailed') + error.message)
     }
 }
 
 const deleteRegularKey = async (index) => {
-    if (!confirm('确定要删除此API Key吗？')) return
+    if (!confirm(t('smsg.confirmDeleteKey'))) return
 
     const keyToDelete = settings.value.regularKeys[index]
     try {
         await axios.post('/api/deleteRegularKey', { apiKey: keyToDelete }, {
             headers: { 'Authorization': localStorage.getItem('apiKey') || '' }
         })
-        alert('API Key删除成功')
+        alert(t('smsg.keyDeleted'))
         await loadSettings()
     } catch (error) {
-        alert('API Key删除失败: ' + error.message)
+        alert(t('smsg.keyDeleteFailed') + error.message)
     }
 }
 
